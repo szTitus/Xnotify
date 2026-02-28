@@ -181,6 +181,13 @@ async function main() {
 
     for (var i = 0; i < newTweets.length; i++) {
       var tweet = newTweets[i];
+
+      // Ignorer les retweets
+      if (tweet.text.startsWith('RT @')) {
+        seenIds.push(tweet.id);
+        continue;
+      }
+
       console.log('   📝 "' + tweet.text.slice(0, 80) + '"');
 
       if (containsTargetEmoji(tweet.text)) {
