@@ -10,6 +10,9 @@ const CONFIG = {
   AUTH_TOKEN: process.env.AUTH_TOKEN,
   CT0:        process.env.CT0,
   TWID:       process.env.TWID,
+
+  // API Claude pour les résumés
+  ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
 };
 
 const TARGET_EMOJIS = [
@@ -24,10 +27,41 @@ function containsTargetEmoji(text) {
   return TARGET_EMOJIS.some(function(e) { return text.includes(e); });
 }
 
+async function summarizeTweet(tweetText) {
+  if (!CONFIG.ANTHROPIC_API_KEY) return null;
+
+  try {
+    var res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': CONFIG.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 150,
+        messages: [{
+          role: 'user',
+          content: 'Résume ce tweet en 1-2 phrases courtes en français, de façon neutre et factuelle :\n\n' + tweetText,
+        }],
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+
+    var data = await res.json();
+    return data.content && data.content[0] ? data.content[0].text : null;
+  } catch (err) {
+    console.error('   ⚠️ Erreur résumé Claude :', err.message);
+    return null;
+  }
+}
+
 async function sendTelegram(tweetText, tweetUrl) {
+  var summary = await summarizeTweet(tweetText);
+
   var message =
-    '🚨 @' + CONFIG.TARGET_ACCOUNT + ' vient de poster :\n\n' +
-    tweetText + '\n\n' +
+    (summary ? summary + '\n\n' : '') +
     '👉 ' + tweetUrl;
 
   var res = await fetch('https://api.telegram.org/bot' + CONFIG.BOT_TOKEN + '/sendMessage', {
@@ -158,6 +192,7 @@ async function main() {
   if (!CONFIG.AUTH_TOKEN)  { console.error('❌ AUTH_TOKEN manquant');  process.exit(1); }
   if (!CONFIG.CT0)         { console.error('❌ CT0 manquant');         process.exit(1); }
   if (!CONFIG.TWID)        { console.error('❌ TWID manquant');        process.exit(1); }
+  if (!CONFIG.ANTHROPIC_API_KEY) { console.warn('⚠️  ANTHROPIC_API_KEY manquant — les résumés seront désactivés'); }
 
   console.log('🚀 Démarrage...');
   console.log('👁  Surveillance de @' + CONFIG.TARGET_ACCOUNT);
