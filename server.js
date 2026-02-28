@@ -8,10 +8,28 @@ const CONFIG = {
   POLL_INTERVAL_MS: 60000,
 };
 
-const TARGET_EMOJIS = ['‼️', '❗️', '❗'];
+// Toutes les variantes possibles
+const TARGET_EMOJIS = [
+  '‼️',  // double exclamation
+  '‼',   // double exclamation sans variation selector
+  '❗️',  // point d'exclamation rouge
+  '❗',   // point d'exclamation rouge sans variation selector
+  '❕',   // point d'exclamation blanc
+  '\u203C', // ‼ unicode
+  '\u2757', // ❗ unicode
+];
 
 function containsTargetEmoji(text) {
   return TARGET_EMOJIS.some(function(e) { return text.includes(e); });
+}
+
+// Mode debug : log le texte brut pour voir ce qui est scrappé
+function debugText(text) {
+  var codes = [];
+  for (var i = 0; i < Math.min(text.length, 50); i++) {
+    codes.push('U+' + text.charCodeAt(i).toString(16).toUpperCase());
+  }
+  console.log('   DEBUG chars:', codes.join(' '));
 }
 
 async function sendTelegram(tweetText, tweetUrl) {
@@ -129,9 +147,14 @@ async function main() {
 
     for (var i = 0; i < newTweets.length; i++) {
       var tweet = newTweets[i];
+      console.log('   Texte: "' + tweet.text.slice(0, 80) + '"');
+      debugText(tweet.text);
+
       if (containsTargetEmoji(tweet.text)) {
         console.log('🎯 Emoji détecté !');
         await sendTelegram(tweet.text, tweet.url);
+      } else {
+        console.log('   (pas d\'emoji cible)');
       }
       seenIds.push(tweet.id);
     }
