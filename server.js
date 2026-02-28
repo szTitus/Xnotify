@@ -44,11 +44,51 @@ async function sendTelegram(tweetText, tweetUrl) {
   }
 }
 
-async function fetchTweets() {
-  var userId = CONFIG.TWID.replace('u%3D', '').replace('u=', '');
+async function resolveUserId(screenName) {
+  var variables = JSON.stringify({ screen_name: screenName, withSafetyModeUserFields: true });
+  var features = JSON.stringify({
+    hidden_profile_likes_enabled: true,
+    hidden_profile_subscriptions_enabled: true,
+    responsive_web_graphql_exclude_directive_enabled: true,
+    verified_phone_label_enabled: false,
+    responsive_web_graphql_skip_user_profile_image_extensions_enabled: false,
+    responsive_web_graphql_timeline_navigation_enabled: true,
+  });
+
+  var url = 'https://twitter.com/i/api/graphql/G3KGOASz96M-Qu0nwmGXNg/UserByScreenName' +
+    '?variables=' + encodeURIComponent(variables) +
+    '&features=' + encodeURIComponent(features);
+
+  var cookieStr =
+    'auth_token=' + CONFIG.AUTH_TOKEN + '; ' +
+    'ct0=' + CONFIG.CT0 + '; ' +
+    'twid=' + CONFIG.TWID;
+
+  var res = await fetch(url, {
+    headers: {
+      'Authorization': 'Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA',
+      'Cookie': cookieStr,
+      'x-csrf-token': CONFIG.CT0,
+      'x-twitter-auth-type': 'OAuth2Session',
+      'x-twitter-client-language': 'fr',
+      'x-twitter-active-user': 'yes',
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Referer': 'https://twitter.com/',
+      'Accept': '*/*',
+    },
+    signal: AbortSignal.timeout(10000),
+  });
+
+  var data = await res.json();
+  var id = data.data.user.result.rest_id;
+  console.log('🔎 ID de @' + screenName + ' : ' + id);
+  return id;
+}
+
+async function fetchTweets(userId) {
 
   var variables = JSON.stringify({
-    userId: userId,
+    userId: userId, // ID numérique du compte cible (résolu via UserByScreenName)
     count: 10,
     includePromotedContent: false,
     withQuickPromoteEligibilityTweetFields: false,
@@ -165,11 +205,12 @@ async function main() {
   console.log('🔑 Via API Twitter avec cookies\n');
 
   var seenIds = loadSeen();
+  var targetUserId = await resolveUserId(CONFIG.TARGET_ACCOUNT);
 
   async function poll() {
     console.log('🔍 [' + new Date().toLocaleTimeString() + '] Vérification...');
 
-    var tweets = await fetchTweets();
+    var tweets = await fetchTweets(targetUserId);
 
     if (tweets.length === 0) {
       console.log('   Aucun tweet récupéré\n');
