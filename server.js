@@ -8,28 +8,16 @@ const CONFIG = {
   POLL_INTERVAL_MS: 60000,
 };
 
-// Toutes les variantes possibles
 const TARGET_EMOJIS = [
-  '‼️',  // double exclamation
-  '‼',   // double exclamation sans variation selector
-  '❗️',  // point d'exclamation rouge
-  '❗',   // point d'exclamation rouge sans variation selector
-  '❕',   // point d'exclamation blanc
-  '\u203C', // ‼ unicode
-  '\u2757', // ❗ unicode
+  '\u203C\uFE0F', // ‼️
+  '\u203C',       // ‼
+  '\u2757\uFE0F', // ❗️
+  '\u2757',       // ❗
+  '\u2755',       // ❕
 ];
 
 function containsTargetEmoji(text) {
   return TARGET_EMOJIS.some(function(e) { return text.includes(e); });
-}
-
-// Mode debug : log le texte brut pour voir ce qui est scrappé
-function debugText(text) {
-  var codes = [];
-  for (var i = 0; i < Math.min(text.length, 50); i++) {
-    codes.push('U+' + text.charCodeAt(i).toString(16).toUpperCase());
-  }
-  console.log('   DEBUG chars:', codes.join(' '));
 }
 
 async function sendTelegram(tweetText, tweetUrl) {
@@ -38,19 +26,13 @@ async function sendTelegram(tweetText, tweetUrl) {
     tweetText + '\n\n' +
     '👉 ' + tweetUrl;
 
-  var url = 'https://api.telegram.org/bot' + CONFIG.BOT_TOKEN + '/sendMessage';
-
-  var res = await fetch(url, {
+  var res = await fetch('https://api.telegram.org/bot' + CONFIG.BOT_TOKEN + '/sendMessage', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: CONFIG.CHAT_ID,
-      text: message,
-    }),
+    body: JSON.stringify({ chat_id: CONFIG.CHAT_ID, text: message }),
   });
 
   var data = await res.json();
-
   if (data.ok) {
     console.log('✅ Message Telegram envoyé !');
   } else {
@@ -60,13 +42,11 @@ async function sendTelegram(tweetText, tweetUrl) {
 
 async function scrapeTweets(browser) {
   var page = await browser.newPage();
-
   try {
     await page.goto('https://twitter.com/' + CONFIG.TARGET_ACCOUNT, {
       waitUntil: 'domcontentloaded',
       timeout: 30000,
     });
-
     await page.waitForSelector('[data-testid="tweet"]', { timeout: 15000 });
 
     var tweets = await page.evaluate(function() {
@@ -83,9 +63,7 @@ async function scrapeTweets(browser) {
           return { id: id, text: text, url: 'https://twitter.com' + href };
         });
     });
-
     return tweets;
-
   } catch (err) {
     console.error('❌ Erreur scraping :', err.message);
     return [];
@@ -97,11 +75,8 @@ async function scrapeTweets(browser) {
 var SEEN_FILE = './seen.json';
 
 function loadSeen() {
-  try {
-    return JSON.parse(fs.readFileSync(SEEN_FILE, 'utf8'));
-  } catch (e) {
-    return [];
-  }
+  try { return JSON.parse(fs.readFileSync(SEEN_FILE, 'utf8')); }
+  catch (e) { return []; }
 }
 
 function saveSeen(ids) {
@@ -109,29 +84,18 @@ function saveSeen(ids) {
 }
 
 async function main() {
-  if (!CONFIG.BOT_TOKEN) {
-    console.error('❌ Variable BOT_TOKEN manquante !');
-    process.exit(1);
-  }
-  if (!CONFIG.CHAT_ID) {
-    console.error('❌ Variable CHAT_ID manquante !');
-    process.exit(1);
-  }
+  if (!CONFIG.BOT_TOKEN) { console.error('❌ BOT_TOKEN manquant'); process.exit(1); }
+  if (!CONFIG.CHAT_ID)   { console.error('❌ CHAT_ID manquant');   process.exit(1); }
 
   console.log('🚀 Démarrage...');
   console.log('👁  Surveillance de @' + CONFIG.TARGET_ACCOUNT);
   console.log('⏱  Vérification toutes les ' + CONFIG.POLL_INTERVAL_MS / 1000 + 's\n');
 
-  var browser = await chromium.launch({
-    headless: true,
-    args: ['--no-sandbox'],
-  });
-
+  var browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
   var seenIds = loadSeen();
 
   async function poll() {
     console.log('🔍 [' + new Date().toLocaleTimeString() + '] Vérification...');
-
     var tweets = await scrapeTweets(browser);
 
     if (tweets.length === 0) {
@@ -139,22 +103,24 @@ async function main() {
       return;
     }
 
-    var newTweets = tweets.filter(function(t) {
-      return t.id && !seenIds.includes(t.id);
-    });
-
+    var newTweets = tweets.filter(function(t) { return t.id && !seenIds.includes(t.id); });
     console.log('   ' + newTweets.length + ' nouveau(x) tweet(s)');
 
     for (var i = 0; i < newTweets.length; i++) {
       var tweet = newTweets[i];
-      console.log('   Texte: "' + tweet.text.slice(0, 80) + '"');
-      debugText(tweet.text);
+
+      // DEBUG : affiche le texte et les codes unicode
+      console.log('   📝 Texte: "' + tweet.text.slice(0, 100) + '"');
+      var codes = Array.from(tweet.text).slice(0, 30).map(function(c) {
+        return 'U+' + c.codePointAt(0).toString(16).toUpperCase();
+      });
+      console.log('   🔬 Unicode: ' + codes.join(' '));
 
       if (containsTargetEmoji(tweet.text)) {
-        console.log('🎯 Emoji détecté !');
+        console.log('🎯 Emoji détecté ! Envoi Telegram...');
         await sendTelegram(tweet.text, tweet.url);
       } else {
-        console.log('   (pas d\'emoji cible)');
+        console.log('   ➡️  Pas d\'emoji cible');
       }
       seenIds.push(tweet.id);
     }
@@ -167,7 +133,6 @@ async function main() {
   setInterval(poll, CONFIG.POLL_INTERVAL_MS);
 
   process.on('SIGINT', async function() {
-    console.log('\n👋 Arrêt...');
     await browser.close();
     process.exit(0);
   });
