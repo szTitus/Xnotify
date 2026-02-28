@@ -1,12 +1,10 @@
 {
   "name": "twitter-alert-bot",
   "version": "1.0.0",
-  "description": "Surveille Twitter et alerte via Telegram",
+  "description": "Surveille Twitter via Nitter RSS et alerte via Telegram",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
-  "dependencies": {
-    "playwright": "^1.58.2"
-  }
+  "dependencies": {}
 }

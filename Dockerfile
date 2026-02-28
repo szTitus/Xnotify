@@ -1,10 +1,6 @@
-FROM mcr.microsoft.com/playwright:v1.58.2-jammy
-
+FROM node:22-slim
 WORKDIR /app
-
 COPY package*.json ./
 RUN npm install
-
 COPY . .
-
 CMD ["node", "server.js"]

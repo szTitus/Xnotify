@@ -1,11 +1,18 @@
-const { chromium } = require('playwright');
 const fs = require('fs');
 
 const CONFIG = {
-  TARGET_ACCOUNT: process.env.TARGET_ACCOUNT || 'L_ThinkTank',
-  BOT_TOKEN:      process.env.BOT_TOKEN,
-  CHAT_ID:        process.env.CHAT_ID,
+  TARGET_ACCOUNT:   process.env.TARGET_ACCOUNT || 'L_ThinkTank',
+  BOT_TOKEN:        process.env.BOT_TOKEN,
+  CHAT_ID:          process.env.CHAT_ID,
   POLL_INTERVAL_MS: 60000,
+
+  // Instances Nitter publiques (on essaie dans l'ordre)
+  NITTER_INSTANCES: [
+    'https://nitter.privacydev.net',
+    'https://nitter.poast.org',
+    'https://nitter.lucahammer.com',
+    'https://nitter.1d4.us',
+  ],
 };
 
 const TARGET_EMOJIS = [
@@ -40,36 +47,67 @@ async function sendTelegram(tweetText, tweetUrl) {
   }
 }
 
-async function scrapeTweets(browser) {
-  var page = await browser.newPage();
-  try {
-    await page.goto('https://twitter.com/' + CONFIG.TARGET_ACCOUNT, {
-      waitUntil: 'domcontentloaded',
-      timeout: 30000,
-    });
-    await page.waitForSelector('[data-testid="tweet"]', { timeout: 15000 });
+// Parse le RSS Nitter manuellement (sans librairie)
+function parseRSS(xml) {
+  var items = [];
+  var itemRegex = /<item>([\s\S]*?)<\/item>/g;
+  var match;
 
-    var tweets = await page.evaluate(function() {
-      return Array.from(document.querySelectorAll('[data-testid="tweet"]'))
-        .slice(0, 10)
-        .map(function(el) {
-          var textEl = el.querySelector('[data-testid="tweetText"]');
-          var text = textEl ? textEl.innerText : '';
-          var timeEl = el.querySelector('time');
-          var linkEl = timeEl ? timeEl.closest('a') : null;
-          var href = linkEl ? linkEl.getAttribute('href') : '';
-          var match = href.match(/\/status\/(\d+)/);
-          var id = match ? match[1] : '';
-          return { id: id, text: text, url: 'https://twitter.com' + href };
-        });
-    });
-    return tweets;
-  } catch (err) {
-    console.error('❌ Erreur scraping :', err.message);
-    return [];
-  } finally {
-    await page.close();
+  while ((match = itemRegex.exec(xml)) !== null) {
+    var block = match[1];
+
+    var titleMatch = block.match(/<title><!\[CDATA\[([\s\S]*?)\]\]><\/title>/);
+    var linkMatch  = block.match(/<link>([\s\S]*?)<\/link>/);
+    var guidMatch  = block.match(/<guid>([\s\S]*?)<\/guid>/);
+
+    var title = titleMatch ? titleMatch[1].trim() : '';
+    var link  = linkMatch  ? linkMatch[1].trim()  : '';
+    var guid  = guidMatch  ? guidMatch[1].trim()  : link;
+
+    // Extraire l'ID depuis l'URL
+    var idMatch = guid.match(/\/status\/(\d+)/);
+    var id = idMatch ? idMatch[1] : guid;
+
+    if (title && id) {
+      items.push({ id: id, text: title, url: 'https://twitter.com' + (idMatch ? idMatch[0].replace('/status/', '/' + CONFIG.TARGET_ACCOUNT + '/status/') : '') });
+    }
   }
+
+  return items;
+}
+
+async function fetchRSS() {
+  for (var i = 0; i < CONFIG.NITTER_INSTANCES.length; i++) {
+    var instance = CONFIG.NITTER_INSTANCES[i];
+    var url = instance + '/' + CONFIG.TARGET_ACCOUNT + '/rss';
+
+    try {
+      console.log('   Essai: ' + instance);
+      var res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+
+      if (!res.ok) {
+        console.log('   ❌ Status: ' + res.status);
+        continue;
+      }
+
+      var xml = await res.text();
+
+      if (!xml.includes('<item>')) {
+        console.log('   ❌ Pas de tweets dans le flux');
+        continue;
+      }
+
+      var tweets = parseRSS(xml);
+      console.log('   ✅ ' + tweets.length + ' tweets récupérés depuis ' + instance);
+      return tweets;
+
+    } catch (err) {
+      console.log('   ❌ Erreur: ' + err.message);
+    }
+  }
+
+  console.log('⚠️  Toutes les instances Nitter ont échoué');
+  return [];
 }
 
 var SEEN_FILE = './seen.json';
@@ -89,17 +127,18 @@ async function main() {
 
   console.log('🚀 Démarrage...');
   console.log('👁  Surveillance de @' + CONFIG.TARGET_ACCOUNT);
-  console.log('⏱  Vérification toutes les ' + CONFIG.POLL_INTERVAL_MS / 1000 + 's\n');
+  console.log('⏱  Vérification toutes les ' + CONFIG.POLL_INTERVAL_MS / 1000 + 's');
+  console.log('📡 Via Nitter RSS (pas de scraping)\n');
 
-  var browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
   var seenIds = loadSeen();
 
   async function poll() {
     console.log('🔍 [' + new Date().toLocaleTimeString() + '] Vérification...');
-    var tweets = await scrapeTweets(browser);
+
+    var tweets = await fetchRSS();
 
     if (tweets.length === 0) {
-      console.log('⚠️  Aucun tweet récupéré\n');
+      console.log('');
       return;
     }
 
@@ -108,20 +147,13 @@ async function main() {
 
     for (var i = 0; i < newTweets.length; i++) {
       var tweet = newTweets[i];
-
-      // DEBUG : affiche le texte et les codes unicode
-      console.log('   📝 Texte: "' + tweet.text.slice(0, 100) + '"');
-      var codes = Array.from(tweet.text).slice(0, 30).map(function(c) {
-        return 'U+' + c.codePointAt(0).toString(16).toUpperCase();
-      });
-      console.log('   🔬 Unicode: ' + codes.join(' '));
+      console.log('   📝 "' + tweet.text.slice(0, 80) + '"');
 
       if (containsTargetEmoji(tweet.text)) {
         console.log('🎯 Emoji détecté ! Envoi Telegram...');
         await sendTelegram(tweet.text, tweet.url);
-      } else {
-        console.log('   ➡️  Pas d\'emoji cible');
       }
+
       seenIds.push(tweet.id);
     }
 
@@ -132,10 +164,7 @@ async function main() {
   await poll();
   setInterval(poll, CONFIG.POLL_INTERVAL_MS);
 
-  process.on('SIGINT', async function() {
-    await browser.close();
-    process.exit(0);
-  });
+  process.on('SIGINT', function() { process.exit(0); });
 }
 
 main().catch(function(err) {
