@@ -4,15 +4,12 @@ const CONFIG = {
   TARGET_ACCOUNT:   process.env.TARGET_ACCOUNT || 'L_ThinkTank',
   BOT_TOKEN:        process.env.BOT_TOKEN,
   CHAT_ID:          process.env.CHAT_ID,
-  POLL_INTERVAL_MS: 60000,
+  POLL_INTERVAL_MS: parseInt(process.env.POLL_INTERVAL_MS) || 60000,
 
-  // Instances Nitter publiques (on essaie dans l'ordre)
-  NITTER_INSTANCES: [
-    'https://nitter.privacydev.net',
-    'https://nitter.poast.org',
-    'https://nitter.lucahammer.com',
-    'https://nitter.1d4.us',
-  ],
+  // Cookies Twitter de ton compte
+  AUTH_TOKEN: process.env.AUTH_TOKEN,
+  CT0:        process.env.CT0,
+  TWID:       process.env.TWID,
 };
 
 const TARGET_EMOJIS = [
@@ -47,67 +44,101 @@ async function sendTelegram(tweetText, tweetUrl) {
   }
 }
 
-// Parse le RSS Nitter manuellement (sans librairie)
-function parseRSS(xml) {
-  var items = [];
-  var itemRegex = /<item>([\s\S]*?)<\/item>/g;
-  var match;
+async function fetchTweets() {
+  var userId = CONFIG.TWID.replace('u%3D', '').replace('u=', '');
 
-  while ((match = itemRegex.exec(xml)) !== null) {
-    var block = match[1];
+  var variables = JSON.stringify({
+    userId: userId,
+    count: 10,
+    includePromotedContent: false,
+    withQuickPromoteEligibilityTweetFields: false,
+    withVoice: false,
+    withV2Timeline: true,
+  });
 
-    var titleMatch = block.match(/<title><!\[CDATA\[([\s\S]*?)\]\]><\/title>/);
-    var linkMatch  = block.match(/<link>([\s\S]*?)<\/link>/);
-    var guidMatch  = block.match(/<guid>([\s\S]*?)<\/guid>/);
+  var features = JSON.stringify({
+    rweb_lists_timeline_redesign_enabled: true,
+    responsive_web_graphql_exclude_directive_enabled: true,
+    verified_phone_label_enabled: false,
+    creator_subscriptions_tweet_preview_api_enabled: true,
+    responsive_web_graphql_timeline_navigation_enabled: true,
+    responsive_web_graphql_skip_user_profile_image_extensions_enabled: false,
+    tweetypie_unmention_optimization_enabled: true,
+    responsive_web_edit_tweet_api_enabled: true,
+    graphql_is_translatable_rweb_tweet_is_translatable_enabled: true,
+    view_counts_everywhere_api_enabled: true,
+    longform_notetweets_consumption_enabled: true,
+    tweet_awards_web_tipping_enabled: false,
+    freedom_of_speech_not_reach_fetch_enabled: true,
+    standardized_nudges_misinfo: true,
+    longform_notetweets_rich_text_read_enabled: true,
+    responsive_web_enhance_cards_enabled: false,
+  });
 
-    var title = titleMatch ? titleMatch[1].trim() : '';
-    var link  = linkMatch  ? linkMatch[1].trim()  : '';
-    var guid  = guidMatch  ? guidMatch[1].trim()  : link;
+  var url = 'https://twitter.com/i/api/graphql/V7H0Ap3_Hh2FyS75OCDO3Q/UserTweets' +
+    '?variables=' + encodeURIComponent(variables) +
+    '&features=' + encodeURIComponent(features);
 
-    // Extraire l'ID depuis l'URL
-    var idMatch = guid.match(/\/status\/(\d+)/);
-    var id = idMatch ? idMatch[1] : guid;
+  var cookieStr =
+    'auth_token=' + CONFIG.AUTH_TOKEN + '; ' +
+    'ct0=' + CONFIG.CT0 + '; ' +
+    'twid=' + CONFIG.TWID;
 
-    if (title && id) {
-      items.push({ id: id, text: title, url: 'https://twitter.com' + (idMatch ? idMatch[0].replace('/status/', '/' + CONFIG.TARGET_ACCOUNT + '/status/') : '') });
+  try {
+    var res = await fetch(url, {
+      headers: {
+        'Authorization': 'Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA',
+        'Cookie': cookieStr,
+        'x-csrf-token': CONFIG.CT0,
+        'x-twitter-auth-type': 'OAuth2Session',
+        'x-twitter-client-language': 'fr',
+        'x-twitter-active-user': 'yes',
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://twitter.com/',
+        'Accept': '*/*',
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!res.ok) {
+      console.log('   ❌ Status HTTP: ' + res.status);
+      return [];
     }
-  }
 
-  return items;
-}
+    var data = await res.json();
 
-async function fetchRSS() {
-  for (var i = 0; i < CONFIG.NITTER_INSTANCES.length; i++) {
-    var instance = CONFIG.NITTER_INSTANCES[i];
-    var url = instance + '/' + CONFIG.TARGET_ACCOUNT + '/rss';
-
+    // Extraire les tweets du JSON GraphQL
+    var tweets = [];
     try {
-      console.log('   Essai: ' + instance);
-      var res = await fetch(url, { signal: AbortSignal.timeout(8000) });
-
-      if (!res.ok) {
-        console.log('   ❌ Status: ' + res.status);
-        continue;
+      var instructions = data.data.user.result.timeline_v2.timeline.instructions;
+      for (var i = 0; i < instructions.length; i++) {
+        var entries = instructions[i].entries || [];
+        for (var j = 0; j < entries.length; j++) {
+          var entry = entries[j];
+          try {
+            var result = entry.content.itemContent.tweet_results.result;
+            var legacy = result.tweet ? result.tweet.legacy : result.legacy;
+            if (legacy && legacy.full_text) {
+              var id = legacy.id_str;
+              tweets.push({
+                id: id,
+                text: legacy.full_text,
+                url: 'https://twitter.com/' + CONFIG.TARGET_ACCOUNT + '/status/' + id,
+              });
+            }
+          } catch (e) {}
+        }
       }
-
-      var xml = await res.text();
-
-      if (!xml.includes('<item>')) {
-        console.log('   ❌ Pas de tweets dans le flux');
-        continue;
-      }
-
-      var tweets = parseRSS(xml);
-      console.log('   ✅ ' + tweets.length + ' tweets récupérés depuis ' + instance);
-      return tweets;
-
-    } catch (err) {
-      console.log('   ❌ Erreur: ' + err.message);
+    } catch (e) {
+      console.log('   ❌ Erreur parsing JSON: ' + e.message);
     }
-  }
 
-  console.log('⚠️  Toutes les instances Nitter ont échoué');
-  return [];
+    return tweets;
+
+  } catch (err) {
+    console.error('   ❌ Erreur fetch: ' + err.message);
+    return [];
+  }
 }
 
 var SEEN_FILE = './seen.json';
@@ -122,23 +153,26 @@ function saveSeen(ids) {
 }
 
 async function main() {
-  if (!CONFIG.BOT_TOKEN) { console.error('❌ BOT_TOKEN manquant'); process.exit(1); }
-  if (!CONFIG.CHAT_ID)   { console.error('❌ CHAT_ID manquant');   process.exit(1); }
+  if (!CONFIG.BOT_TOKEN)   { console.error('❌ BOT_TOKEN manquant');   process.exit(1); }
+  if (!CONFIG.CHAT_ID)     { console.error('❌ CHAT_ID manquant');     process.exit(1); }
+  if (!CONFIG.AUTH_TOKEN)  { console.error('❌ AUTH_TOKEN manquant');  process.exit(1); }
+  if (!CONFIG.CT0)         { console.error('❌ CT0 manquant');         process.exit(1); }
+  if (!CONFIG.TWID)        { console.error('❌ TWID manquant');        process.exit(1); }
 
   console.log('🚀 Démarrage...');
   console.log('👁  Surveillance de @' + CONFIG.TARGET_ACCOUNT);
   console.log('⏱  Vérification toutes les ' + CONFIG.POLL_INTERVAL_MS / 1000 + 's');
-  console.log('📡 Via Nitter RSS (pas de scraping)\n');
+  console.log('🔑 Via API Twitter avec cookies\n');
 
   var seenIds = loadSeen();
 
   async function poll() {
     console.log('🔍 [' + new Date().toLocaleTimeString() + '] Vérification...');
 
-    var tweets = await fetchRSS();
+    var tweets = await fetchTweets();
 
     if (tweets.length === 0) {
-      console.log('');
+      console.log('   Aucun tweet récupéré\n');
       return;
     }
 
