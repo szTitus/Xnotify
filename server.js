@@ -4,7 +4,7 @@ const CONFIG = {
   TARGET_ACCOUNT:   process.env.TARGET_ACCOUNT || 'L_ThinkTank',
   BOT_TOKEN:        process.env.BOT_TOKEN,
   CHAT_ID:          process.env.CHAT_ID,
-  POLL_INTERVAL_MS: parseInt(process.env.POLL_INTERVAL_MS) || 300000,
+  POLL_INTERVAL_MS: parseInt(process.env.POLL_INTERVAL_MS) || 400000,
 
   // Cookies Twitter de ton compte
   AUTH_TOKEN: process.env.AUTH_TOKEN,
